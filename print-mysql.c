@@ -30,6 +30,8 @@ struct bpf_program fp;
 char   filter_exp[11] = "port ";
 u_int  total_mysql_pkts;
 u_int  total_mysql_bytes;
+int tags_initialized = 0;
+int state_map_initialized = 0;
 
 #include "mysql/mysqlsniffer.h"
 #include "mysql/packet_handlers.h"
@@ -41,14 +43,22 @@ u_int  total_mysql_bytes;
 tag_id tags[MAX_TAGS];
 tag_id *tag;               // Information about the current connection
 
+void init_tags(void);
 tag_id *get_tag(u_int addr, u_short port);
+void init_state_map(void);
 
 void
 mysql_print(const u_char *sp, u_int length, struct in_addr *ip_src, u_short sport, struct in_addr *ip_dst, u_short dport)
 {
-    printf("\n    *** mysql: length = %d ***\n", length);
-    printf("    ip_src = %s; sport = %d\n", ipaddr_string(ip_src), sport);
-    printf("    ip_dst = %s; dport = %d\n", ipaddr_string(ip_dst), dport);
+    if (!tags_initialized) {
+        init_tags();
+        tags_initialized = 1;
+    }
+
+    if (!state_map_initialized) {
+        init_state_map();
+        state_map_initialized = 1;
+    }
 
     if (sport == 3306) {
         tag = get_tag((u_int)ip_dst->s_addr, dport);
@@ -56,8 +66,6 @@ mysql_print(const u_char *sp, u_int length, struct in_addr *ip_src, u_short spor
     else {
         tag = get_tag((u_int)ip_src->s_addr, sport);
     }
-
-    printf("    tag = %p\n", tag);
 
     multi_pkts(sp, length);
 }
@@ -81,7 +89,6 @@ int multi_pkts(const u_char *pkts, u_int total_len)
    u_int used_len = 0;
    struct mysql_hdr *m;
 
-#if 0
    // If last pkt was fragmented, merge with current pkts
    if(tag->pkt_fragment) {
       tag->pkt_fragment = 0;
@@ -98,7 +105,6 @@ int multi_pkts(const u_char *pkts, u_int total_len)
       pkts = buff_frag;
       total_len += tag->frag_len;
    }
-#endif
 
    while(1) {
       m = (struct mysql_hdr *)pkts; // Packet header
@@ -109,16 +115,16 @@ int multi_pkts(const u_char *pkts, u_int total_len)
       // Check if pkts > len of pkts actually received (last pkt is fragmented)
       used_len = used_len + m->pkt_length + 4;
       if(used_len > total_len) {
-         // tag->pkt_fragment = 1;
-         // tag->frag_len     = m->pkt_length - (used_len - total_len) + 4;
+         tag->pkt_fragment = 1;
+         tag->frag_len     = m->pkt_length - (used_len - total_len) + 4;
 
          pkts -= 4;
 
-         // if(tag->frag)
-         //    tag->frag = (u_char *)realloc(tag->frag, tag->frag_len);
-         // else
-         //    tag->frag = (u_char *)malloc(tag->frag_len);
-         // memcpy(tag->frag, pkts, tag->frag_len);
+         if(tag->frag)
+            tag->frag = (u_char *)realloc(tag->frag, tag->frag_len);
+         else
+            tag->frag = (u_char *)malloc(tag->frag_len);
+         memcpy(tag->frag, pkts, tag->frag_len);
 
          printf("::FRAGMENT END::\n");
 
@@ -126,30 +132,30 @@ int multi_pkts(const u_char *pkts, u_int total_len)
          break;
       }
 
-      // tag->current_pkt_id = m->pkt_id;
+      tag->current_pkt_id = m->pkt_id;
 
       if(!op.no_myhdrs) printf("ID %u len %u ", m->pkt_id, m->pkt_length);
 
       total_mysql_pkts++;
       total_mysql_bytes = total_mysql_bytes + 4 + m->pkt_length;
 
-      // if(m->pkt_length) {
-      //    memcpy(buff, pkts, m->pkt_length);
-      //    retval = parse_pkt(buff, m->pkt_length);
-      // }
-      // else
-      //    printf("ID %u Zero-length MySQL packet ", m->pkt_id);
-      // printf("\n");
+      if(m->pkt_length) {
+         memcpy(buff, pkts, m->pkt_length);
+         retval = parse_pkt(buff, m->pkt_length);
+      }
+      else
+         printf("ID %u Zero-length MySQL packet ", m->pkt_id);
+      printf("\n");
 
-      // tag->last_pkt_id = m->pkt_id;
+      tag->last_pkt_id = m->pkt_id;
 
       if((i + m->pkt_length) >= total_len) break; // No more pkts
 
       pkts += m->pkt_length; // Next pkt header
       i += m->pkt_length;
 
-      // if(retval == PKT_PARSED_OK)
-      //    tag->last_origin = tag->current_origin;
+      if(retval == PKT_PARSED_OK)
+         tag->last_origin = tag->current_origin;
 
       printf("\t");
    }
