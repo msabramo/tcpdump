@@ -2,11 +2,6 @@
 #include "config.h"
 #endif
 
-#ifndef lint
-static const char rcsid[] _U_ =
-     "@(#) $Header$";
-#endif
-
 #include <tcpdump-stdinc.h>
 
 #include <stdio.h>
@@ -20,19 +15,6 @@ static const char rcsid[] _U_ =
 #define MAX_TAGS            100    // Max number of connections to track
 #define MAX_FIELD_TYPES     256
 
-/*
-  Global vars
-*/
-u_char buff[SNAP_LEN];     // For general MySQL packet processing
-u_char *buff_frag;         // Last pkt fragment (tag->frag) + next pkts
-pcap_t *handle;
-struct bpf_program fp;
-char   filter_exp[11] = "port ";
-u_int  total_mysql_pkts;
-u_int  total_mysql_bytes;
-int tags_initialized = 0;
-int state_map_initialized = 0;
-
 #include "mysql/mysqlsniffer.h"
 #include "mysql/packet_handlers.h"
 #include "mysql/state_map.h"
@@ -40,12 +22,24 @@ int state_map_initialized = 0;
 #include "mysql/user_defines.h"
 #include "mysql/misc.h"
 
+/*
+  Global vars
+*/
+u_char buff[SNAP_LEN];     // For general MySQL packet processing
+u_char *buff_frag;         // Last pkt fragment (tag->frag) + next pkts
+u_int  total_mysql_pkts;
+u_int  total_mysql_bytes;
+int tags_initialized = 0;
+int state_map_initialized = 0;
+
 tag_id tags[MAX_TAGS];
 tag_id *tag;               // Information about the current connection
 
 void init_tags(void);
 tag_id *get_tag(u_int addr, u_short port);
 void init_state_map(void);
+int multi_pkts(const u_char *pkts, u_int total_len);
+int parse_pkt(u_char *pkt, u_int len);
 
 void
 mysql_print(const u_char *sp, u_int length, struct in_addr *ip_src, u_short sport, struct in_addr *ip_dst, u_short dport)
@@ -75,7 +69,7 @@ mysql_print(const u_char *sp, u_int length, struct in_addr *ip_src, u_short spor
   MySQL packet processing
 */
 
-/* 
+/*
   MySQL will send N amount of logical packets in one physical packet. Each
   logical packet starts with a MySQL header which says how long that logical
   pkt is minus the header itself (m->pkt_length). Along w/ the total length of
@@ -548,23 +542,6 @@ void init_state_map(void)
    state_map[STATE_COM_PONG].next_state[0] = STATE_SLEEP;
    state_map[STATE_COM_PONG].num_events = 1;
 }
-
-
-// packet_handlers.c Aug 18, 2006 UNSTABLE
-
-// #include <stdio.h>
-// #include <stdlib.h>
-// #include <string.h>
-// #include <sys/types.h>
-// #include "mysql/mysql_defines.h"
-// #include "mysql/user_defines.h"
-// #include "mysql/state_map.h"
-// #include "mysql/packet_handlers.h"
-// #include "mysql/misc.h"
-// #include "mysql/mysqlsniffer.h"
-
-extern struct st_options op;      // Declared in mysqlsniffer.h
-extern tag_id *tag;               // Declared in mysqlsniffer.h
 
 // MySQL server > client connection handshake pkt
 int pkt_handshake_server(u_char *pkt, u_int len)
@@ -1128,17 +1105,6 @@ int pkt_stmt_execute(u_char *pkt, u_int len)
    return PKT_HANDLED;
 }
 
-
-// misc.c Aug 18, 2006 UNSTABLE
-
-// #include <stdio.h>
-// #include <stdlib.h>
-// #include <string.h>
-// #include <ctype.h>
-// #include "user_defines.h"
-// #include "mysql_defines.h"
-// #include "misc.h"
-
 void dump_pkt(u_char *pkt, u_int len, char only_hex)
 {
    int i;
@@ -1221,7 +1187,7 @@ u_int convert_binary_number(u_char *number, u_short flags, u_int bytes, u_char *
       if(flags & UNSIGNED_FLAG)
          sprintf(sz, "%llu", ln);
       else
-         sprintf(sz, "%lld", ln);      
+         sprintf(sz, "%lld", ln);
    }
 
    len = strlen(sz);
