@@ -644,7 +644,7 @@ tcp_print(register const u_char *bp, register u_int length,
                         telnet_print(bp, length);
         } else if (sport == MYSQL_PORT || dport == MYSQL_PORT) {
                 if (!qflag && vflag)
-                        mysql_print(bp, length);
+                        mysql_print(bp, length, &ip->ip_src, sport, &ip->ip_dst, dport);
         } else if (sport == BGP_PORT || dport == BGP_PORT)
                 bgp_print(bp, length);
         else if (sport == PPTP_PORT || dport == PPTP_PORT)
